@@ -20,5 +20,8 @@ RUN pip install -e . && \
 
 EXPOSE 8000
 
-# Bind IPv6 (::) so Railway's internal IPv6 networking can reach it.
-CMD ["sh", "-c", "uvicorn api:app --host :: --port ${PORT:-8000}"]
+# run.py binds a DUAL-STACK :: socket (IPV6_V6ONLY=0) so the server answers both
+# Railway's IPv6 private network (siblings via *.railway.internal) AND Railway's
+# IPv4 deploy healthcheck. Plain `uvicorn --host ::` is IPv6-only (asyncio forces
+# IPV6_V6ONLY=1) and makes the healthcheck fail. See run.py for the full rationale.
+CMD ["python", "run.py"]
