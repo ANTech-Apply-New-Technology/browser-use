@@ -43,8 +43,12 @@ from collections import OrderedDict
 from contextlib import suppress
 from typing import Any, Literal
 
+import ipaddress
+import socket
+import time
+
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 # browser_use imports are deferred into the worker so the module can be imported
@@ -58,6 +62,16 @@ logger = logging.getLogger("browser_use.api")
 # ----------------------------------------------------------------------------
 
 WEBTASK_API_KEY = os.environ.get("WEBTASK_API_KEY")
+# Optional source-IP allowlist (comma-separated hostnames, e.g.
+# "spr-clawbot.railway.internal"). When set, protected routes require BOTH a
+# valid bearer token AND a peer IP that resolves to one of these hosts — so only
+# the designated sibling service can drive browser-use. Railway's private network
+# is per-project isolated, IPv6 ULA, no-NAT, so the peer IP is a reliable identity.
+WEBTASK_ALLOWED_CLIENTS = [
+    h.strip() for h in os.environ.get("WEBTASK_ALLOWED_CLIENTS", "").split(",") if h.strip()
+]
+_ALLOWED_TTL_SEC = 30.0
+_allowed_cache: dict[str, Any] = {"ts": -1e9, "ips": frozenset()}
 BROWSERUSE_MODEL = os.environ.get("BROWSERUSE_MODEL", "claude-opus-4-8")
 JOB_TIMEOUT_SEC = int(os.environ.get("JOB_TIMEOUT_SEC", "600"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "2"))
@@ -181,13 +195,50 @@ def _store_job(job: Job) -> None:
 # ----------------------------------------------------------------------------
 
 
-async def require_auth(authorization: str | None = Header(default=None)) -> None:
+def _norm_ip(addr: str | None) -> str | None:
+    if not addr:
+        return addr
+    try:
+        return str(ipaddress.ip_address(addr.split("%", 1)[0]))
+    except ValueError:
+        return addr
+
+
+def _resolve_allowed_ips() -> frozenset:
+    if not WEBTASK_ALLOWED_CLIENTS:
+        return frozenset()
+    now = time.monotonic()
+    if now - _allowed_cache["ts"] < _ALLOWED_TTL_SEC:
+        return _allowed_cache["ips"]
+    ips = set()
+    for host in WEBTASK_ALLOWED_CLIENTS:
+        try:
+            for info in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP):
+                ips.add(_norm_ip(info[4][0]))
+        except socket.gaierror as exc:
+            logger.warning("WEBTASK_ALLOWED_CLIENTS: could not resolve %s: %s", host, exc)
+    if ips:
+        _allowed_cache["ips"] = frozenset(ips)
+    _allowed_cache["ts"] = now
+    return _allowed_cache["ips"]
+
+
+async def require_auth(
+    request: Request, authorization: str | None = Header(default=None)
+) -> None:
     if not WEBTASK_API_KEY:
         logger.error("WEBTASK_API_KEY is not set; refusing protected request (fail closed).")
         raise HTTPException(status_code=503, detail="Server not configured: WEBTASK_API_KEY unset")
     expected = f"Bearer {WEBTASK_API_KEY}"
     if authorization != expected:
         raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
+    # Defense-in-depth: when an allowlist is configured, the peer IP must also
+    # resolve to a designated sibling (only spr-clawbot may drive the browsers).
+    if WEBTASK_ALLOWED_CLIENTS:
+        peer = _norm_ip(request.client.host if request.client else None)
+        if not peer or peer not in _resolve_allowed_ips():
+            logger.warning("Rejected request from non-allowlisted peer: %s", peer)
+            raise HTTPException(status_code=403, detail="Client not allowed")
 
 
 # ----------------------------------------------------------------------------
