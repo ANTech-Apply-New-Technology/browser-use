@@ -71,7 +71,7 @@ WEBTASK_ALLOWED_CLIENTS = [
     h.strip() for h in os.environ.get("WEBTASK_ALLOWED_CLIENTS", "").split(",") if h.strip()
 ]
 _ALLOWED_TTL_SEC = 30.0
-_allowed_cache: dict[str, Any] = {"ts": -1e9, "ips": frozenset()}
+_allowed_cache: dict[str, Any] = {"ts": -1e9, "last_attempt": -1e9, "ips": frozenset()}
 BROWSERUSE_MODEL = os.environ.get("BROWSERUSE_MODEL", "claude-opus-4-8")
 JOB_TIMEOUT_SEC = int(os.environ.get("JOB_TIMEOUT_SEC", "600"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "2"))
@@ -204,12 +204,19 @@ def _norm_ip(addr: str | None) -> str | None:
         return addr
 
 
-def _resolve_allowed_ips() -> frozenset:
+def _resolve_allowed_ips(force: bool = False) -> frozenset:
+    # force=True re-resolves immediately (rate-limited to 3s) so a spr-clawbot
+    # redeploy to a new private IP isn't locked out for the full TTL. `ts` is
+    # bumped only on a successful resolve, so DNS failures keep retrying instead
+    # of freezing a stale set as fresh.
     if not WEBTASK_ALLOWED_CLIENTS:
         return frozenset()
     now = time.monotonic()
-    if now - _allowed_cache["ts"] < _ALLOWED_TTL_SEC:
+    if not force and (now - _allowed_cache["ts"] < _ALLOWED_TTL_SEC):
         return _allowed_cache["ips"]
+    if force and (now - _allowed_cache["last_attempt"] < 3.0):
+        return _allowed_cache["ips"]
+    _allowed_cache["last_attempt"] = now
     ips = set()
     for host in WEBTASK_ALLOWED_CLIENTS:
         try:
@@ -219,7 +226,7 @@ def _resolve_allowed_ips() -> frozenset:
             logger.warning("WEBTASK_ALLOWED_CLIENTS: could not resolve %s: %s", host, exc)
     if ips:
         _allowed_cache["ips"] = frozenset(ips)
-    _allowed_cache["ts"] = now
+        _allowed_cache["ts"] = now
     return _allowed_cache["ips"]
 
 
@@ -234,9 +241,13 @@ async def require_auth(
         raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
     # Defense-in-depth: when an allowlist is configured, the peer IP must also
     # resolve to a designated sibling (only spr-clawbot may drive the browsers).
+    # NOTE: request.client.host is the raw socket peer — this service is private
+    # (no public domain) and uvicorn runs without --proxy-headers, so it is NOT
+    # derived from a spoofable X-Forwarded-For.
     if WEBTASK_ALLOWED_CLIENTS:
         peer = _norm_ip(request.client.host if request.client else None)
-        if not peer or peer not in _resolve_allowed_ips():
+        allowed = peer and (peer in _resolve_allowed_ips() or peer in _resolve_allowed_ips(force=True))
+        if not allowed:
             logger.warning("Rejected request from non-allowlisted peer: %s", peer)
             raise HTTPException(status_code=403, detail="Client not allowed")
 
