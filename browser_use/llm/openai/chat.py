@@ -21,6 +21,33 @@ from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 T = TypeVar('T', bound=BaseModel)
 
 
+def _extract_json_text(text: str) -> str:
+	"""Best-effort recovery of a JSON object/array from model output.
+
+	Some OpenAI-compatible proxies (e.g. Anthropic / claude-opus-4-8 via
+	ANT-Proxy) do not strictly honor response_format=json_schema, so the
+	returned content is occasionally wrapped in markdown fences or surrounded by
+	prose. pydantic's strict model_validate_json then rejects it ("Invalid JSON:
+	expected ident"). Strip fences and slice to the outermost {...}/[...] so a
+	transient formatting wobble doesn't abort the whole agent run.
+	"""
+	s = (text or '').strip()
+	if s.startswith('```'):
+		nl = s.find('\n')
+		if nl != -1:
+			s = s[nl + 1 :]
+		if s.rstrip().endswith('```'):
+			s = s.rstrip()[:-3]
+		s = s.strip()
+	candidates = [i for i in (s.find('{'), s.find('[')) if i != -1]
+	if candidates:
+		start = min(candidates)
+		end = max(s.rfind('}'), s.rfind(']'))
+		if end > start:
+			s = s[start : end + 1]
+	return s
+
+
 @dataclass
 class ChatOpenAI(BaseChatModel):
 	"""
@@ -281,7 +308,13 @@ class ChatOpenAI(BaseChatModel):
 
 				usage = self._get_usage(response)
 
-				parsed = output_format.model_validate_json(choice.message.content)
+				try:
+					parsed = output_format.model_validate_json(choice.message.content)
+				except Exception:
+					# Lenient retry: recover JSON wrapped in markdown/prose by an
+					# OpenAI-compatible proxy before failing the step (see
+					# _extract_json_text). A genuinely malformed output still raises.
+					parsed = output_format.model_validate_json(_extract_json_text(choice.message.content or ''))
 
 				return ChatInvokeCompletion(
 					completion=parsed,
