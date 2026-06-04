@@ -379,6 +379,14 @@ async def _run_agent(job: Job) -> None:
             llm=llm,
             browser_session=session,
             use_vision=job.use_vision,
+            # claude-opus-4-8 via the OpenAI-compat ANT-Proxy occasionally emits a
+            # structured-output response the agent can't parse ("failed to produce
+            # correct output format"). It's intermittent, not persistent — most
+            # steps succeed. The default max_failures=5 aborts the whole task on a
+            # short transient streak (a run died at 6 steps this way). Raise the
+            # tolerance so the agent rides out transient format hiccups and keeps
+            # going; a genuinely stuck model still stops, just later.
+            max_failures=15,
         )
         history = await agent.run(max_steps=job.max_steps)
 
