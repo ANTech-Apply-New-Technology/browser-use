@@ -334,6 +334,22 @@ async def _run_agent(job: Job) -> None:
         # Block raw IP navigation (covers 127.0.0.1, 169.254.x, ::1, etc.) as a
         # defence-in-depth SSRF measure on top of the request-level blocklist.
         "block_ip_addresses": True,
+        # Booking widgets (BokaBord, Caspeco, TheFork, ...) are usually embedded
+        # in a CROSS-ORIGIN iframe. Keep OOPIF traversal on explicitly so a future
+        # browser-use default flip can't silently break booking-form filling.
+        # NOTE: this alone is insufficient when the remote Chrome runs with Site
+        # Isolation — that iframe stays out-of-process and its DOM is unreachable.
+        # The decisive fix is CHROME_EXTRA_ARGS=--disable-features=IsolateOrigins,
+        # site-per-process on the chrome-browseruse container (see chrome-novnc-cdp
+        # 5-chromium.conf). These two work together.
+        "cross_origin_iframes": True,
+        # Raise the per-page iframe cap so ad/tracking iframes can't crowd out the
+        # real booking widget before it is serialized.
+        "max_iframes": 200,
+        # paint_order_filtering is experimental and can suppress clickable indices
+        # on cards that are visible but judged occluded — turn it off so booking
+        # widget cards stay clickable.
+        "paint_order_filtering": False,
     }
     if job.allowed_domains:
         profile_kwargs["allowed_domains"] = job.allowed_domains
