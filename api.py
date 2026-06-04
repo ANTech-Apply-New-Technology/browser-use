@@ -326,7 +326,23 @@ async def _run_agent(job: Job) -> None:
     # HTTP 400 "`temperature` is deprecated for this model". ChatOpenAI defaults
     # temperature to 0.2 and only omits it from the request when it is None
     # (see browser_use/llm/openai/chat.py), so we must pass None explicitly.
-    llm = ChatOpenAI(model=BROWSERUSE_MODEL, api_key=api_key, base_url=base_url, temperature=None)
+    llm = ChatOpenAI(
+        model=BROWSERUSE_MODEL,
+        api_key=api_key,
+        base_url=base_url,
+        temperature=None,
+        # ANT-Proxy fronts Anthropic (claude-opus-4-8) via an OpenAI-compatible
+        # shim. OpenAI's strict `response_format: json_schema` is NOT reliably
+        # honored on that path, so the agent intermittently "fails to produce
+        # correct output format" and aborts mid-task. Harden structured output:
+        #  - add_schema_to_system_prompt: also put the JSON schema in the prompt,
+        #    so the model formats correctly even if the proxy drops response_format.
+        #  - remove_min_items / remove_defaults: strip schema features Anthropic's
+        #    tool-schema validation chokes on (documented provider-compat knobs).
+        add_schema_to_system_prompt=True,
+        remove_min_items_from_schema=True,
+        remove_defaults_from_schema=True,
+    )
 
     profile_kwargs: dict[str, Any] = {
         "cdp_url": cdp_url,
