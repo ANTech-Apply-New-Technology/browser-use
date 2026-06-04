@@ -321,7 +321,12 @@ async def _run_agent(job: Job) -> None:
         job.finished_at = time.time()
         return
 
-    llm = ChatOpenAI(model=BROWSERUSE_MODEL, api_key=api_key, base_url=base_url)
+    # temperature=None is REQUIRED for the Anthropic models behind ANT-Proxy
+    # (e.g. claude-opus-4-8): they reject the `temperature` param entirely with
+    # HTTP 400 "`temperature` is deprecated for this model". ChatOpenAI defaults
+    # temperature to 0.2 and only omits it from the request when it is None
+    # (see browser_use/llm/openai/chat.py), so we must pass None explicitly.
+    llm = ChatOpenAI(model=BROWSERUSE_MODEL, api_key=api_key, base_url=base_url, temperature=None)
 
     profile_kwargs: dict[str, Any] = {
         "cdp_url": cdp_url,
