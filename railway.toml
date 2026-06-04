@@ -1,0 +1,23 @@
+# Railway deploy config for the browser_use FastAPI job server.
+#
+# Required / supported environment variables (set in the Railway service):
+#   ANT_PROXY_URL        Base URL of the OpenAI-compatible LLM proxy (e.g. https://proxy.example.com)
+#                        "/v1" is appended automatically.
+#   ANT_PROXY_API_KEY    API key for the LLM proxy (sent to ChatOpenAI as api_key).
+#   BROWSERUSE_MODEL     Model name to request from the proxy. Default: claude-opus-4-8
+#   USE_VISION           "true"/"false" default for vision. Default: true (overridable per request).
+#   CHROME_CDP_URL       CDP url of the remote Chrome, e.g.
+#                        http://chrome-browseruse.railway.internal:9222
+#   CDP_AUTH_TOKEN       Optional token; appended as ?token=<token> to CHROME_CDP_URL.
+#   WEBTASK_API_KEY      Bearer token required on all protected routes. If unset, protected
+#                        routes return 503 (fail closed). /health stays open.
+#   JOB_TIMEOUT_SEC      Overall per-job timeout in seconds. Default: 600
+#   MAX_CONCURRENT_JOBS  Max jobs running concurrently. Default: 2
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile.api"
+
+[deploy]
+healthcheckPath = "/health"
+restartPolicyType = "on_failure"

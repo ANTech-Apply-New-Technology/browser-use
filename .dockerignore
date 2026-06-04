@@ -2,6 +2,15 @@ docs/
 static/
 .claude/
 .github/
+tests/
+examples/
+skills/
+bin/
+# Trim docs/markdown but KEEP README.md (pyproject readme = "README.md" is
+# required by `pip install -e .`).
+*.md
+!README.md
+.git/
 
 # Cache files
 .DS_Store
