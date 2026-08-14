@@ -1,0 +1,4 @@
+# Memant node-vault marker. This repo's vault/ latches into the local hub via 'memant sync'.
+name: browser-use
+namespace: browser-use        # cross-vault links use [[browser-use/<page>]]
+shareable: true         # ONLY shareable project knowledge here — it travels with the repo (git)
